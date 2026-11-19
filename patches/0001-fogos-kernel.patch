@@ -167,6 +167,33 @@ index 69b13f9..7862b73 100644
  export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := arm64e
  endif
  endif
+diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
+index a1f2a91..61d6a47 100644
+--- a/osfmk/arm64/machine_routines.c
++++ b/osfmk/arm64/machine_routines.c
+@@ -2180,17 +2180,17 @@ ml_get_decrementer(void)
+ 	return dec;
+ }
+ 
+-#if defined(SWEET)
++#if defined(SWEET) || defined(ARM64_BOARD_CONFIG_FOGOS)
+ /*
+- * sweet: arm_vm_init() calls this unconditionally; Apple's definition (it
+- * enters the PPL/monitor) ships only in the closed per-SoC library. There is
+- * no monitor on SWEET.
++ * sweet/fogos: arm_vm_init() calls this unconditionally; Apple's definition
++ * (it enters the PPL/monitor) ships only in the closed per-SoC library.
++ * There is no monitor on these boards.
+  */
+ void
+ ml_enable_monitor(void)
+ {
+ }
+-#endif /* SWEET */
++#endif /* SWEET || ARM64_BOARD_CONFIG_FOGOS */
+ 
+ boolean_t
+ ml_get_timer_pending(void)
 diff --git a/osfmk/arm64/proc_reg.h b/osfmk/arm64/proc_reg.h
 index e01c124..452569c 100644
 --- a/osfmk/arm64/proc_reg.h
@@ -234,6 +261,34 @@ index 7a01e7f..bb31ccf 100644
  
  #if (!CONFIG_KERNEL_INTEGRITY || (CONFIG_KERNEL_INTEGRITY && !defined(KERNEL_INTEGRITY_WT)))
  	/* Watchtower
+diff --git a/osfmk/kern/exception.c b/osfmk/kern/exception.c
+index a20a764..e821584 100644
+--- a/osfmk/kern/exception.c
++++ b/osfmk/kern/exception.c
+@@ -820,12 +820,12 @@ exception_triage(
+ 	return exception_triage_thread(exception, code, codeCnt, thread);
+ }
+ 
+-#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FOGOS)
+ #include <vm/vm_shared_region.h>
+ #include <arm/thread.h>
+ 
+ /*
+- * SWEET crash report on the console. The phone has no way to get crash
++ * SWEET/FOGOS crash report on the console. The phone has no way to get crash
+  * logs off the device, and corpses stop after a few crashes, so print what
+  * symbolication needs: user registers, a frame-pointer backtrace, the
+  * shared cache slide (unslid = pc - slide) and the main binary's Mach-O
+@@ -1040,7 +1040,7 @@ sweet_sample_task(const char *name, int pid, task_t task)
+ 	task_unlock(task);
+ }
+ 
+-#endif /* ARM64_BOARD_CONFIG_SWEET */
++#endif /* ARM64_BOARD_CONFIG_SWEET || ARM64_BOARD_CONFIG_FOGOS */
+ 
+ kern_return_t
+ bsd_exception(
 diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
 index 6089db9..f76dfa4 100644
 --- a/pexpert/arm/pe_fiq.c

@@ -1,0 +1,170 @@
+name: fogos (Open Mapple) kernel + tethered boot image
+
+# Builds the Open Mapple Qualcomm XNU tree with MACHINE_CONFIG=FOGOS on a GitHub
+# macOS runner, then packages it with the (Linux-built) ios-fogos shim so the
+# result can be tried with `fastboot boot` without flashing anything.
+# All sources are public and pinned; no IPSW, firmware or device dump is used.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_config:
+        description: XNU kernel config
+        type: choice
+        options: [DEVELOPMENT, RELEASE, DEBUG]
+        default: DEVELOPMENT
+      boot_args:
+        description: boot args for the temporary boot image (read-only; no flash/wipe flags)
+        type: string
+        default: "debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1 wdt=-1"
+  push:
+    branches: [main, master, open-mapple-ci]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: fogos-openmapple-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DXB_REPO: https://github.com/blacktop/darwin-xnu-build
+  DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
+  QCOM_SHA: 4724e33509d23b43f60777c40c54402db8e46481
+  BUILD_SHA: 7262951971120a95b95a3d1bbe4e19e6b0a47f6a
+  FOGOS_SHA: 6497156beb1aa41d3a18a16af693c9e1bdbf291f
+
+jobs:
+  kernel:
+    name: XNU FOGOS kernel (macOS)
+    runs-on: macos-15-intel
+    timeout-minutes: 120
+    env:
+      KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pinned sources + local patches
+        run: |
+          set -euo pipefail
+          fetch() { git init -q "$2"; git -C "$2" fetch -q --depth 1 "$1" "$3"; git -C "$2" checkout -q FETCH_HEAD; }
+          fetch https://github.com/open-mapple/xnu_kernel_qcom_common.git qcom "$QCOM_SHA"
+          fetch https://github.com/open-mapple/mapple_build.git build "$BUILD_SHA"
+          fetch https://github.com/kitbodega/ios-fogos.git fogos "$FOGOS_SHA"
+          git -C qcom apply ../patches/0001-fogos-kernel.patch
+          git -C build apply ../patches/0002-fogos-mapple-build.patch
+          echo "qcom kernel tree: $(git -C qcom rev-parse --short HEAD) + FOGOS patch"
+
+      - name: Toolchain
+        run: |
+          set -euo pipefail
+          brew install jq gum bash cmake ninja
+          # darwin-xnu-build only checks these exist; Xcode is preinstalled.
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes >/dev/null
+          sudo chmod +x /usr/local/bin/xcodes
+          XC=$(ls -d /Applications/Xcode_*.app | sort -V | head -1)
+          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$XC"
+          sw_vers
+          xcodebuild -version
+          xcrun --find iig || echo "no iig in this Xcode (kernel build will report the real failure)"
+
+      - name: Build kernel
+        run: |
+          set -euo pipefail
+          git init -q dxb
+          git -C dxb fetch -q --depth 1 "$DXB_REPO" "$DXB_SHA"
+          git -C dxb checkout -q FETCH_HEAD
+          # The FOGOS kernel is plain arm64, not arm64e.
+          sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
+          grep -q 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh
+          rm -rf dxb/xnu
+          mkdir -p dxb/xnu
+          (cd qcom && git ls-files -z -c -o --exclude-standard | rsync -a -0 --files-from=- ./ "../dxb/xnu/")
+          sed -i '' 's/^my \$BUILDER=`whoami`;/my $BUILDER="openmapple";/' dxb/xnu/config/newvers.pl
+          grep -q '^my \$BUILDER="openmapple";' dxb/xnu/config/newvers.pl
+          mkdir -p dxb/bin ../out
+          for t in gum xcodes; do printf '#!/bin/sh\nexit 0\n' > "dxb/bin/$t"; chmod +x "dxb/bin/$t"; done
+          export PATH="$PWD/dxb/bin:$PATH"
+          cd dxb
+          MACOS_VERSION=13.5 KERNEL_CONFIG="$KERNEL_CONFIG" MACHINE_CONFIG=FOGOS ARCH_CONFIG=ARM64 \
+            KDKROOT=/Library/Developer/KDKs/KDK_13.5_22G74.kdk \
+            bash build.sh 2>&1 | tee build.log
+          kc=$(echo "$KERNEL_CONFIG" | tr A-Z a-z)
+          k=$(ls build/xnu.obj/kernel.$kc.* 2>/dev/null | grep -v -E '\.(dSYM|unstripped)$' | head -1)
+          [ -n "$k" ] || { echo "no kernel built; see build.log" >&2; exit 1; }
+          cp "$k" ../out/kernel.fogos
+          shasum -a 256 ../out/kernel.fogos
+
+      - name: Build log on failure
+        if: failure()
+        run: tail -n 250 dxb/build.log 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xnu-kernel
+          path: out/kernel.fogos
+          if-no-files-found: error
+          retention-days: 14
+
+  boot-image:
+    name: ADT + payload + boot.img (Linux)
+    needs: kernel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      FOGOS_BOOT_ARGS: ${{ inputs.boot_args || 'debug=0xc serial=3 cpus=1 keepsyms=1 -enable_kprintf_spam -noprogress rd=ufsroot0 unentitled_ios_sim_launch=1 ignition_level=1 wdt_test=no_user_checkin launchd_unsecure_cache=1 wdt=-1' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pinned sources
+        run: |
+          set -euo pipefail
+          fetch() { git init -q "$2"; git -C "$2" fetch -q --depth 1 "$1" "$3"; git -C "$2" checkout -q FETCH_HEAD; }
+          fetch https://github.com/open-mapple/mapple_build.git build "$BUILD_SHA"
+          fetch https://github.com/kitbodega/ios-fogos.git fogos "$FOGOS_SHA"
+          git -C build apply ../patches/0002-fogos-mapple-build.patch
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: xnu-kernel
+          path: kernel-artifact
+
+      - name: Install AArch64 tools
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu cpio
+
+      - name: ADT, payload and boot image
+        run: |
+          set -euo pipefail
+          mkdir -p fogos/dtb fogos/shim/out
+          # Open Mapple's generator with the ported --fogos layout. The kernel
+          # vendor d22ap.adt is optional: only the /product node is skipped.
+          python3 build/tools/mkadt.py fogos/dtb/fogos.adt --fogos
+          k=$(find kernel-artifact -type f -name 'kernel.fogos' | head -1)
+          [ -n "$k" ]
+          python3 fogos/tools/mkpayload.py "$k" fogos/dtb/fogos.adt fogos/shim/out/fogos-payload.bin \
+            --fogos --cmdline "$FOGOS_BOOT_ARGS"
+          (cd fogos && bash shim/build.sh --fogos shim/out/fogos-payload.bin)
+          python3 - <<'PY'
+          from pathlib import Path
+          import struct
+          image = Path('fogos/shim/out/fogos-boot.img').read_bytes()
+          kernel = Path('fogos/shim/out/Image').read_bytes()
+          assert image[:8] == b'ANDROID!'
+          assert struct.unpack_from('<I', image, 40)[0] == 3          # boot img v3
+          assert struct.unpack_from('<I', image, 8)[0] == len(kernel)
+          assert kernel[56:60] == b'ARMd'
+          assert kernel[64:].find(b'FOGOSXNU') >= 0
+          print(f'verified: boot.img v3, kernel={len(kernel)}, adt+payload embedded')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fogos-boot
+          path: |
+            fogos/shim/out/Image
+            fogos/shim/out/shim.elf
+            fogos/shim/out/fogos-boot.img
+            fogos/dtb/fogos.adt
+          retention-days: 14

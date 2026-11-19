@@ -1,5 +1,5 @@
 diff --git a/core/mka.sh b/core/mka.sh
-index b8c7d17..99af247 100755
+index b8c7d17..612da86 100755
 --- a/core/mka.sh
 +++ b/core/mka.sh
 @@ -67,6 +67,16 @@ fetch() {
@@ -46,7 +46,16 @@ index b8c7d17..99af247 100755
  	# Nothing of this Mac in the kernel: a neutral builder in the version string iOS shows (newvers.pl asks whoami),
  	# and the build directory mapped away from the __FILE__ strings of asserts and panics. Objects built with other
  	# flags are thrown away first.
-@@ -152,8 +167,10 @@ step_kernel() {
+@@ -146,14 +161,18 @@ step_kernel() {
+ 	export RC_NONARCH_CFLAGS="-ffile-prefix-map=$D=/openmapple"
+ 	[ "$(cat "$K/flags" 2>/dev/null)" = "$RC_NONARCH_CFLAGS" ] || { rm -rf "$D/build"; echo "$RC_NONARCH_CFLAGS" > "$K/flags"; }
+ 	# the SDK's target macros beside the staged libpthread and HFS (kernel builds use -nostdinc)
+-	for d in bsd/pthread/libpthread_staged bsd/hfs_staged; do
++	# qcom/common builds its HFS from bsd/sweet_hfs, not bsd/hfs_staged.
++	for d in bsd/pthread/libpthread_staged bsd/hfs_staged bsd/sweet_hfs; do
++		[ -d "$D/xnu/$d" ] || continue
+ 		cp "$(xcrun --sdk macosx --show-sdk-path)/usr/include/TargetConditionals.h" "$D/xnu/$d/"
+ 	done
  	kl=$(echo "$kc" | tr A-Z a-z)
  	rm -f "$D"/build/xnu.obj/kernel.$kl.*     # build.sh skips the kernel when one is there
  	say "kernel ($kc), log in $K/build.log"
@@ -59,7 +68,7 @@ index b8c7d17..99af247 100755
  	k=$(ls "$D"/build/xnu.obj/kernel.$kl.* 2>/dev/null | grep -v -E '\.(dSYM|unstripped)$' | head -1)
  	[ -n "$k" ] || { echo "mka: no kernel built: see $K/build.log" >&2; exit 1; }
  	cp "$k" "$OUT/kernel"
-@@ -161,8 +178,18 @@ step_kernel() {
+@@ -161,8 +180,18 @@ step_kernel() {
  	echo "$stamp" > "$K/stamp"
  }
  
@@ -78,7 +87,7 @@ index b8c7d17..99af247 100755
  	local S=$OBJ/shim
  	rm -rf "$S"; mkdir -p "$S"
  	(cd "$TOP/mapple/loader/shim" && git ls-files -z -c -o --exclude-standard | rsync -a -0 --files-from=- ./ "$S/")
-@@ -172,6 +199,7 @@ step_shim() {
+@@ -172,6 +201,7 @@ step_shim() {
  }
  
  step_loader() {
@@ -86,7 +95,7 @@ index b8c7d17..99af247 100755
  	local L=$OBJ/loader touch=none
  	rm -rf "$L"; mkdir -p "$L/mtk/loader" "$L/shim"
  	(cd "$TOP/mapple/loader/mtk/loader" && git ls-files -z -c -o --exclude-standard | rsync -a -0 --files-from=- ./ "$L/mtk/loader/")
-@@ -199,7 +227,7 @@ step_payload() {
+@@ -199,7 +229,7 @@ step_payload() {
  	echo "$cmdline" > "$P/cmdline"
  	size=$(stat -f %z "$P/xnu.bin") max=$(conf payload_max "$DEV/device.conf")
  	[ "$size" -lt $((max)) ] || { echo "mka: xnu.bin: $size bytes, over $max" >&2; exit 1; }

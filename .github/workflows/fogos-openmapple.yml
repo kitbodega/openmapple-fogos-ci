@@ -84,6 +84,12 @@ jobs:
           (cd qcom && git ls-files -z -c -o --exclude-standard | rsync -a -0 --files-from=- ./ "../dxb/xnu/")
           sed -i '' 's/^my \$BUILDER=`whoami`;/my $BUILDER="openmapple";/' dxb/xnu/config/newvers.pl
           grep -q '^my \$BUILDER="openmapple";' dxb/xnu/config/newvers.pl
+          # Kernel builds use -nostdinc; HFS's kext-config.h needs the SDK target macros.
+          # qcom/common compiles HFS from bsd/sweet_hfs (not bsd/hfs_staged).
+          sdk=$(xcrun --sdk macosx --show-sdk-path)
+          for d in bsd/pthread/libpthread_staged bsd/hfs_staged bsd/sweet_hfs; do
+            [ -d "dxb/xnu/$d" ] && cp "$sdk/usr/include/TargetConditionals.h" "dxb/xnu/$d/"
+          done
           mkdir -p dxb/bin ../out
           for t in gum xcodes; do printf '#!/bin/sh\nexit 0\n' > "dxb/bin/$t"; chmod +x "dxb/bin/$t"; done
           export PATH="$PWD/dxb/bin:$PATH"

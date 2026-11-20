@@ -90,7 +90,7 @@ jobs:
           for d in bsd/pthread/libpthread_staged bsd/hfs_staged bsd/sweet_hfs; do
             [ -d "dxb/xnu/$d" ] && cp "$sdk/usr/include/TargetConditionals.h" "dxb/xnu/$d/"
           done
-          mkdir -p dxb/bin ../out
+          mkdir -p dxb/bin out
           for t in gum xcodes; do printf '#!/bin/sh\nexit 0\n' > "dxb/bin/$t"; chmod +x "dxb/bin/$t"; done
           export PATH="$PWD/dxb/bin:$PATH"
           cd dxb

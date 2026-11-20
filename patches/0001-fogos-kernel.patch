@@ -543,3 +543,21 @@ index 88e524a..39f06ae 100644
  #ifdef ARM64_BOARD_CONFIG_VMAPPLE
  #include <pexpert/arm64/VMAPPLE.h>
  
+diff --git a/tools/lldbmacros/core/syntax_checker.py b/tools/lldbmacros/core/syntax_checker.py
+index 3ebc295..14cdbff 100755
+--- a/tools/lldbmacros/core/syntax_checker.py
++++ b/tools/lldbmacros/core/syntax_checker.py
+@@ -12,6 +12,13 @@ Usage:
+ """
+ import sys
+ import os
++# When this script is executed directly, sys.path[0] is this directory, which
++# also contains collections.py from the LLDB macros. Python's re -> functools
++# -> collections import chain then picks up that file instead of the stdlib
++# module and fails with "attempted relative import with no known parent
++# package". Drop this directory from the search path before importing re.
++_here = os.path.dirname(os.path.abspath(__file__))
++sys.path[:] = [p for p in sys.path if not p or os.path.abspath(p) != _here]
+ import re
+ 
+ tabs_search_rex = re.compile("^\s*\t+",re.MULTILINE|re.DOTALL)
